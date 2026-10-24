@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TouchBot</string>
+    <string name="a11y_description">Lets TouchBot replay recorded taps and swipes, read the screen, and run AI-driven automations on your behalf.</string>
+</resources>
