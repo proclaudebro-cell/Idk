@@ -78,6 +78,16 @@ class ActionRunner(private val svc: AutomationService) {
         try {
             when (a.type) {
                 "tap" -> gesture(listOf(Pt(px(a.x), py(a.y), 0)), 50, onResult)
+                "double_tap" -> {
+                    val gap = if (a.duration in 60..600) a.duration else 120
+                    val x = px(a.x); val y = py(a.y)
+                    val path = { Path().apply { moveTo(x, y) } }
+                    val desc = GestureDescription.Builder()
+                        .addStroke(GestureDescription.StrokeDescription(path(), 0, 40))
+                        .addStroke(GestureDescription.StrokeDescription(path(), gap, 40))
+                        .build()
+                    dispatch(desc, onResult)
+                }
                 "long_press" -> gesture(listOf(Pt(px(a.x), py(a.y), 0)), max(a.duration, 700), onResult)
                 "swipe" -> gesture(
                     listOf(Pt(px(a.x), py(a.y), 0), Pt(px(a.x2), py(a.y2), 0)),
@@ -112,6 +122,10 @@ class ActionRunner(private val svc: AutomationService) {
         val desc = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, dur))
             .build()
+        dispatch(desc, onResult)
+    }
+
+    private fun dispatch(desc: GestureDescription, onResult: (Boolean) -> Unit) {
         val accepted = svc.dispatchGesture(desc, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) = onResult(true)
             override fun onCancelled(gestureDescription: GestureDescription?) = onResult(false)

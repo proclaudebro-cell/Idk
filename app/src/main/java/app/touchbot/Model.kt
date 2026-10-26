@@ -27,6 +27,7 @@ data class Action(
         put("delay", delay)
         when (type) {
             "tap" -> { put("x", x.toDouble()); put("y", y.toDouble()) }
+            "double_tap" -> { put("x", x.toDouble()); put("y", y.toDouble()); put("duration", duration) }
             "long_press" -> { put("x", x.toDouble()); put("y", y.toDouble()); put("duration", duration) }
             "swipe" -> {
                 put("x", x.toDouble()); put("y", y.toDouble())

@@ -41,6 +41,10 @@ class OverlayController(private val svc: AutomationService) {
     private var playBtn: TextView? = null
     private var aiBtn: TextView? = null
     private var extraRow: LinearLayout? = null
+    private var scrollRow: LinearLayout? = null
+    private var pendingTap: Action? = null
+    private var pendingTapUp = 0L
+    private val flushTap = Runnable { flushPendingTap() }
     private var capture: View? = null
     private var captureLp: WindowManager.LayoutParams? = null
     private var promptBox: View? = null
@@ -49,6 +53,8 @@ class OverlayController(private val svc: AutomationService) {
     private var lastEventTime = 0L
     private var recW = 0
     private var recH = 0
+
+    private companion object { const val DOUBLE_TAP_MS = 300L }
 
     private fun dp(v: Int) = (v * density).toInt()
 
@@ -87,6 +93,12 @@ class OverlayController(private val svc: AutomationService) {
         extraRow!!.addView(button("⌂ Home", Color.rgb(70, 70, 90)) { recordGlobal("home") })
         extraRow!!.addView(button("▣ Apps", Color.rgb(70, 70, 90)) { recordGlobal("recents") })
         p.addView(extraRow)
+        scrollRow = LinearLayout(svc).apply { visibility = View.GONE }
+        scrollRow!!.addView(button("\u21E9", Color.rgb(70, 70, 90)) { recordSwipe(0f, 0.28f) })
+        scrollRow!!.addView(button("\u21E7", Color.rgb(70, 70, 90)) { recordSwipe(0f, -0.28f) })
+        scrollRow!!.addView(button("\u21E8", Color.rgb(70, 70, 90)) { recordSwipe(0.3f, 0f) })
+        scrollRow!!.addView(button("\u21E6", Color.rgb(70, 70, 90)) { recordSwipe(-0.3f, 0f) })
+        p.addView(scrollRow)
 
         val lp = overlayParams(
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
@@ -106,6 +118,10 @@ class OverlayController(private val svc: AutomationService) {
     fun hide() {
         runner.cancel()
         agent.cancel()
+        main.removeCallbacks(flushTap)
+        pendingTap = null
+        replayQueue.clear()
+        replaying = false
         removePrompt()
         removeCapture()
         panel?.let { runCatching { wm.removeView(it) } }
@@ -127,6 +143,7 @@ class OverlayController(private val svc: AutomationService) {
         val (w, h) = svc.screenSize()
         recW = w; recH = h
         recorded.clear()
+        pendingTap = null
         lastEventTime = SystemClock.uptimeMillis()
         val view = View(svc).apply {
             background = GradientDrawable().apply {
@@ -155,13 +172,17 @@ class OverlayController(private val svc: AutomationService) {
         }
         mode = Mode.RECORDING
         extraRow?.visibility = View.VISIBLE
+        scrollRow?.visibility = View.VISIBLE
         setStatus("Recording - use the phone normally")
         refreshButtons()
     }
 
     private fun stopRecording() {
+        main.removeCallbacks(flushTap)
+        flushPendingTap()
         removeCapture()
         extraRow?.visibility = View.GONE
+        scrollRow?.visibility = View.GONE
         mode = Mode.IDLE
         if (recorded.isEmpty()) {
             setStatus("Nothing recorded")
@@ -176,6 +197,7 @@ class OverlayController(private val svc: AutomationService) {
 
     private fun recordGlobal(type: String) {
         if (mode != Mode.RECORDING) return
+        flushPendingTap()
         val now = SystemClock.uptimeMillis()
         recorded.add(Action(type, delay = delayFrom(now)))
         lastEventTime = now
@@ -243,19 +265,84 @@ class OverlayController(private val svc: AutomationService) {
             Action("gesture", duration = dur, points = Geometry.downsample(pts, 40))
         }
         // downTime/upTime are event-time (uptime) values, the same clock as lastEventTime.
+        val prev = pendingTap
+        if (action.type == "tap" && prev != null &&
+            downTime - pendingTapUp < DOUBLE_TAP_MS &&
+            kotlin.math.hypot(action.x - prev.x, action.y - prev.y) < slop * 3
+        ) {
+            // Second tap of a double tap: merge into one action, keeping the original delay.
+            main.removeCallbacks(flushTap)
+            pendingTap = null
+            val gap = (downTime - pendingTapDown).coerceIn(60, 600)
+            val merged = Action("double_tap", delay = prev.delay, x = prev.x, y = prev.y, duration = gap)
+            recorded[recorded.size - 1] = merged
+            lastEventTime = upTime
+            setStatus("Recorded double tap (${recorded.size} steps)")
+            replayThroughCapture(merged.copy(delay = 0))
+            return
+        }
+        flushPendingTap()
         recorded.add(action.copy(delay = delayFrom(downTime)))
         lastEventTime = upTime
         setStatus("Recorded ${recorded.size} steps")
-        replayThroughCapture(action)
+        if (action.type == "tap") {
+            // Hold the tap briefly in case a second tap follows.
+            pendingTap = recorded.last()
+            pendingTapUp = upTime
+            pendingTapDown = downTime
+            main.postDelayed(flushTap, DOUBLE_TAP_MS)
+        } else {
+            replayThroughCapture(action)
+        }
     }
+
+    private var pendingTapDown = 0L
+
+    private fun flushPendingTap() {
+        val t = pendingTap ?: return
+        pendingTap = null
+        main.removeCallbacks(flushTap)
+        replayThroughCapture(t.copy(delay = 0))
+    }
+
+    private fun recordSwipe(dxFrac: Float, dyFrac: Float) {
+        if (mode != Mode.RECORDING) return
+        flushPendingTap()
+        val (w, h) = svc.screenSize()
+        val cx = w / 2f; val cy = h / 2f
+        val a = Action(
+            "swipe", x = cx + dxFrac * w, y = cy + dyFrac * h,
+            x2 = cx - dxFrac * w, y2 = cy - dyFrac * h, duration = 350,
+        )
+        val now = SystemClock.uptimeMillis()
+        recorded.add(a.copy(delay = delayFrom(now)))
+        lastEventTime = now
+        setStatus("Recorded scroll (${recorded.size} steps)")
+        replayThroughCapture(a)
+    }
+
+    private val replayQueue = ArrayDeque<Action>()
+    private var replaying = false
 
     /** Re-injects a captured stroke so the app underneath still receives it. */
     private fun replayThroughCapture(a: Action) {
+        replayQueue.addLast(a)
+        if (!replaying) nextReplay()
+    }
+
+    private fun nextReplay() {
+        val a = replayQueue.removeFirstOrNull()
+        if (a == null) {
+            replaying = false
+            setCaptureTouchable(true)
+            return
+        }
+        replaying = true
         setCaptureTouchable(false)
         runner.execute(a, recW, recH) { ok ->
             main.post {
-                setCaptureTouchable(true)
                 if (!ok) setStatus("Warning: that touch could not be passed through")
+                nextReplay()
             }
         }
     }
