@@ -1,7 +1,13 @@
 {
-  "name": "CoinRush",
+  "name": "HollowNight",
   "tree": {
     "$className": "DataModel",
+    "Lighting": {
+      "$className": "Lighting",
+      "$properties": {
+        "Technology": "Future"
+      }
+    },
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
       "Shared": { "$path": "src/shared" }
@@ -16,10 +22,6 @@
         "$className": "StarterPlayerScripts",
         "Client": { "$path": "src/client" }
       }
-    },
-    "Workspace": {
-      "$className": "Workspace",
-      "$properties": { "FilteringEnabled": true }
     }
   }
 }
