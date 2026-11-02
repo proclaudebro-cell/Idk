@@ -10,6 +10,7 @@ import cv2
 from PIL import Image, ImageTk
 
 import compose
+import tiktok_import
 import feed
 import random
 
@@ -41,6 +42,8 @@ class App(tk.Tk):
 
         ttk.Label(right, text="1. Template video").pack(anchor="w")
         ttk.Button(right, text="Choose template...", command=self.pick_template).pack(fill="x")
+        ttk.Button(right, text="Import my TikTok favorites...",
+                   command=self.import_favorites).pack(fill="x", pady=(2, 0))
         self.tpl_label = ttk.Label(right, text="(none)", wraplength=220)
         self.tpl_label.pack(anchor="w", pady=(2, 10))
 
@@ -177,8 +180,45 @@ class App(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def import_favorites(self):
+        if not messagebox.askokcancel(
+                "Import TikTok favorites",
+                "In TikTok: Settings > Account > Download your data (JSON).\n"
+                "Then pick the file (or the .zip) you receive.\n\n"
+                "Videos are downloaded for your personal use as templates. "
+                "Don't repost other creators' videos or sounds."):
+            return
+        p = filedialog.askopenfilename(title="TikTok data export",
+                                       filetypes=[("Export", "*.json *.txt *.zip"), ("All", "*.*")])
+        if not p:
+            return
+        try:
+            links = tiktok_import.parse_favorites(p)
+        except Exception as e:
+            return messagebox.showerror("FaceEdit", f"Could not read export: {e}")
+        if not links:
+            return messagebox.showinfo("FaceEdit", "No favorite-video links found in that file.")
+        dest = str(feed.LIBRARY / "templates")
+        self.status.config(text=f"Downloading {len(links)} favorites...")
+
+        def work():
+            try:
+                ok, failed = tiktok_import.download(
+                    links, dest,
+                    progress=lambda i, n: self.after(0, self.bar.configure, {"value": i / n}))
+            except ImportError:
+                return self.after(0, lambda: messagebox.showerror("FaceEdit", "yt-dlp is not installed."))
+            def done():
+                self.templates_dir = dest
+                self.status.config(text=f"Got {ok} templates ({len(failed)} failed). "
+                                        "Record, then Auto-edit with template folder.")
+            self.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
+
     def batch(self):
-        d = filedialog.askdirectory(title="Folder of template videos")
+        d = filedialog.askdirectory(title="Folder of template videos",
+                                    initialdir=getattr(self, "templates_dir", str(feed.LIBRARY)))
         if not d:
             return
         tpls = [os.path.join(d, f) for f in sorted(os.listdir(d))
