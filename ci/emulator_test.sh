@@ -68,5 +68,6 @@ types = [a["type"] for a in rec["actions"]]
 print("action types:", types)
 assert "tap" in types, "tap was not recorded"
 assert "gesture" in types, "swipe was not recorded"
+assert types.count("tap") == 1 and types.count("gesture") == 1, f"duplicate steps recorded: {types}"
 print("PASS: tap and swipe recorded")
 PY

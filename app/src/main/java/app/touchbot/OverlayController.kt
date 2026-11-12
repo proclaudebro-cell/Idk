@@ -215,6 +215,12 @@ class OverlayController(private val svc: AutomationService) {
         var downTime = 0L
         var pointerId = -1
         return View.OnTouchListener { v, ev ->
+            // While a captured touch is being re-injected, the capture window may still be
+            // touchable for a few ms; ignore everything so our own injected tap isn't re-recorded.
+            if (replaying) {
+                pts = ArrayList()
+                return@OnTouchListener true
+            }
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     pts = ArrayList()
