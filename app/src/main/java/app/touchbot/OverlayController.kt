@@ -19,6 +19,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,7 +49,7 @@ class OverlayController(private val svc: AutomationService) {
     private var dblRowView: LinearLayout? = null
     private var modeBtn: TextView? = null
     private var doubleTapArmed = false
-    private var dblBtn: TextView? = null
+    private var suppressClicksUntil = 0L
     private var capture: View? = null
     private var captureLp: WindowManager.LayoutParams? = null
     private var promptBox: View? = null
@@ -106,11 +107,19 @@ class OverlayController(private val svc: AutomationService) {
         scrollRow!!.addView(button("\u21E9", Color.rgb(70, 70, 90)) { recordSwipe(0f, 0.28f) })
         scrollRow!!.addView(button("\u21E7", Color.rgb(70, 70, 90)) { recordSwipe(0f, -0.28f) })
         scrollRow!!.addView(button("\u21E8", Color.rgb(70, 70, 90)) { recordSwipe(0.3f, 0f) })
-        dblBtn = button("2\u00D7 Tap", Color.rgb(70, 70, 90)) { setDoubleTapArmed(!doubleTapArmed) }
         scrollRow!!.addView(button("\u21E6", Color.rgb(70, 70, 90)) { recordSwipe(-0.3f, 0f) })
         p.addView(scrollRow)
         val dblRow = LinearLayout(svc).apply { visibility = View.GONE }
-        dblRow.addView(dblBtn!!)
+        // Recording helper only: while on, each tap you make reaches the app twice, but the
+        // recording keeps a single tap, so playback taps once.
+        dblRow.addView(Switch(svc).apply {
+            text = "2\u00D7 Tap  "
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            isChecked = doubleTapArmed
+            setOnCheckedChangeListener { _, on -> doubleTapArmed = on }
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+        })
         dblRowView = dblRow
         p.addView(dblRow)
 
@@ -168,7 +177,6 @@ class OverlayController(private val svc: AutomationService) {
         extraRow?.visibility = View.VISIBLE
         scrollRow?.visibility = View.VISIBLE
         dblRowView?.visibility = View.VISIBLE
-        setDoubleTapArmed(false)
         setStatus(if (prefs.precise) "Recording (precise) - use the phone normally" else "Recording - taps, scrolls and typing are captured")
         refreshButtons()
     }
@@ -258,6 +266,8 @@ class OverlayController(private val svc: AutomationService) {
         if (!liveRecording || mode != Mode.RECORDING) return
         if ((e.eventType and handledEvents) == 0) return   // skip the binder calls below for window events
         if (e.packageName == svc.packageName) return
+        if ((e.eventType and (AccessibilityEvent.TYPE_VIEW_CLICKED or AccessibilityEvent.TYPE_VIEW_LONG_CLICKED)) != 0 &&
+            SystemClock.uptimeMillis() < suppressClicksUntil) return
         val src = e.source ?: return
         try {
             if (src.window?.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return
@@ -267,14 +277,14 @@ class OverlayController(private val svc: AutomationService) {
                     flushPending()
                     val r = Rect().also { src.getBoundsInScreen(it) }
                     if (r.isEmpty) return
-                    val type = when {
-                        e.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "long_press"
-                        doubleTapArmed -> "double_tap"
-                        else -> "tap"
+                    val long = e.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
+                    val x = r.exactCenterX(); val y = r.exactCenterY()
+                    add(if (long) Action("long_press", x = x, y = y, duration = 700) else Action("tap", x = x, y = y), now)
+                    if (!long && doubleTapArmed) {
+                        // Send the app a second tap now; it fires its own click event, which must not be recorded.
+                        suppressClicksUntil = now + 600
+                        main.postDelayed({ runner.execute(Action("tap", x = x, y = y), recW, recH) {} }, 90)
                     }
-                    if (type == "double_tap") setDoubleTapArmed(false)
-                    add(Action(type, x = r.exactCenterX(), y = r.exactCenterY(),
-                        duration = when (type) { "long_press" -> 700L; "double_tap" -> 120L; else -> 0L }), now)
                     if (r.width().toLong() * r.height() > 0.4 * recW * recH) {
                         setStatus("Recorded ${recorded.size} steps - big area tapped, replay hits its centre (use Precise mode for exact spots)")
                     }
@@ -413,22 +423,13 @@ class OverlayController(private val svc: AutomationService) {
             Action("gesture", duration = dur, points = Geometry.downsample(pts, 40))
         }
         // downTime/upTime are event-time (uptime) values, the same clock as lastEventTime.
-        var rec = action
-        if (action.type == "tap" && doubleTapArmed) {
-            // The toggle makes this single tap register as a double tap, then switches itself off.
-            rec = Action("double_tap", x = action.x, y = action.y, duration = 120)
-            setDoubleTapArmed(false)
-        }
-        recorded.add(rec.copy(delay = delayFrom(downTime)))
+        recorded.add(action.copy(delay = delayFrom(downTime)))
         lastEventTime = upTime
-        setStatus("Recorded ${recorded.size} steps" + if (rec.type == "double_tap") " (double tap)" else "")
-        replayThroughCapture(rec.copy(delay = 0))
-    }
-
-    private fun setDoubleTapArmed(on: Boolean) {
-        doubleTapArmed = on
-        dblBtn?.background = rounded(if (on) Color.rgb(230, 150, 20) else Color.rgb(70, 70, 90), 10)
-        dblBtn?.text = if (on) "2\u00D7 Tap ON" else "2\u00D7 Tap"
+        setStatus("Recorded ${recorded.size} steps")
+        // With 2x Tap on, the app underneath gets a double tap, but only one tap is recorded.
+        val passThrough = if (action.type == "tap" && doubleTapArmed)
+            Action("double_tap", x = action.x, y = action.y, duration = 120) else action
+        replayThroughCapture(passThrough.copy(delay = 0))
     }
 
     private fun recordSwipe(dxFrac: Float, dyFrac: Float) {
