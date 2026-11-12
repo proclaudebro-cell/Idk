@@ -1,9 +1,8 @@
 name: Emulator test
 
 on:
+  # Manual only for now: the test can't see the floating panel in uiautomator dumps yet.
   workflow_dispatch:
-  push:
-    paths: ['app/**', 'ci/**', 'build.gradle.kts', 'settings.gradle.kts', '.github/workflows/emulator-test.yml']
 
 permissions:
   contents: read
