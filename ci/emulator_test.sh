@@ -32,6 +32,14 @@ tap_text() {
   echo "FAIL: could not find '$1' on screen";   adb exec-out screencap -p > "$OUT/fail-$RANDOM.png" || true
   return 1
 }
+show_ui() {  # prints every window/package/text in the last dump, for CI logs
+  python3 - "$OUT/ui.xml" <<'PY' || true
+import sys, xml.etree.ElementTree as ET
+for n in ET.parse(sys.argv[1]).iter("node"):
+    if n.get("text") or n.get("content-desc"):
+        print("  UI", n.get("package"), repr(n.get("text")), repr(n.get("content-desc")), n.get("bounds"))
+PY
+}
 shot() { adb exec-out screencap -p > "$OUT/$1.png" || true; }
 
 adb install -r -t "$APK"
@@ -89,7 +97,7 @@ PY
 tap_text "Show floating controls"; sleep 2
 
 # ---- Phase 1: Live mode (default): real click + scroll inside Settings ----
-dump; grep -q "Mode: Live" "$OUT/ui.xml" || { shot not-live; echo "FAIL: panel not in Live mode by default"; exit 1; }
+dump; grep -q "Mode: Live" "$OUT/ui.xml" || { shot not-live; show_ui; adb shell dumpsys window windows | grep -i "touchbot\|AccessibilityOverlay" | head -10; echo "FAIL: panel not in Live mode by default"; exit 1; }
 tap_text "Rec"; sleep 1
 adb shell am start -a android.settings.SETTINGS >/dev/null; sleep 3
 tap_settings_row; sleep 2
