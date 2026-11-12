@@ -1,6 +1,7 @@
 package app.touchbot
 
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -13,6 +14,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -145,41 +147,47 @@ class OverlayController(private val svc: AutomationService) {
         recW = w; recH = h
         recorded.clear()
         lastEventTime = SystemClock.uptimeMillis()
-        val view = View(svc).apply {
-            background = GradientDrawable().apply {
-                setColor(Color.argb(10, 255, 0, 0))
-                setStroke(dp(3), Color.argb(200, 255, 40, 40))
+        pendingScroll = null; pendingText = null
+        // Live mode (default) records from accessibility events, so touches reach the app
+        // untouched with zero delay. Precise mode swallows touches and re-injects them.
+        if (prefs.precise) {
+            val view = View(svc).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.argb(10, 255, 0, 0))
+                    setStroke(dp(3), Color.argb(200, 255, 40, 40))
+                }
+                setOnTouchListener(captureTouchListener())
             }
-            setOnTouchListener(captureTouchListener())
-        }
-        val lp = overlayParams(
-            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-        )
-        if (Build.VERSION.SDK_INT >= 28) {
-            lp.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        }
-        capture = view
-        captureLp = lp
-        wm.addView(view, lp)
-        // Put the control panel back above the capture layer so it stays tappable.
-        panel?.let { p ->
-            runCatching { wm.removeView(p) }
-            wm.addView(p, panelLp)
+            val lp = overlayParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
+            if (Build.VERSION.SDK_INT >= 28) {
+                lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            capture = view
+            captureLp = lp
+            wm.addView(view, lp)
+            // Put the control panel back above the capture layer so it stays tappable.
+            panel?.let { p ->
+                runCatching { wm.removeView(p) }
+                wm.addView(p, panelLp)
+            }
         }
         mode = Mode.RECORDING
         extraRow?.visibility = View.VISIBLE
         scrollRow?.visibility = View.VISIBLE
         dblRowView?.visibility = View.VISIBLE
         setDoubleTapArmed(false)
-        setStatus("Recording - use the phone normally")
+        setStatus(if (prefs.precise) "Recording (precise) - use the phone normally" else "Recording - taps, scrolls and typing are captured")
         refreshButtons()
     }
 
     private fun stopRecording() {
+        flushScroll(); flushText()
         removeCapture()
         extraRow?.visibility = View.GONE
         scrollRow?.visibility = View.GONE
@@ -194,6 +202,84 @@ class OverlayController(private val svc: AutomationService) {
             setStatus("Saved \"$name\" (${recorded.size} steps)")
         }
         refreshButtons()
+    }
+
+
+    // ---- live recording from accessibility events ----
+
+    private class PendingScroll(val bounds: Rect, var dx: Int, var dy: Int, val startedAt: Long)
+    private var pendingScroll: PendingScroll? = null
+    private var pendingText: String? = null
+    private var pendingTextAt = 0L
+    private val flushRunnable = Runnable { flushScroll(); flushText() }
+
+    fun onAccessibilityEvent(e: AccessibilityEvent) {
+        if (mode != Mode.RECORDING || prefs.precise) return
+        if (e.packageName == svc.packageName) return
+        val now = SystemClock.uptimeMillis()
+        when (e.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
+                flushScroll(); flushText()
+                val r = boundsOf(e) ?: return
+                val long = e.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
+                var a = if (long) Action("long_press", x = r.exactCenterX(), y = r.exactCenterY(), duration = 700)
+                else Action("tap", x = r.exactCenterX(), y = r.exactCenterY())
+                if (a.type == "tap" && doubleTapArmed) {
+                    a = Action("double_tap", x = a.x, y = a.y, duration = 120)
+                    setDoubleTapArmed(false)
+                }
+                add(a, now)
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                if (Build.VERSION.SDK_INT < 28) return
+                flushText()
+                val r = boundsOf(e) ?: return
+                val ps = pendingScroll
+                if (ps == null) pendingScroll = PendingScroll(r, e.scrollDeltaX, e.scrollDeltaY, now)
+                else { ps.dx += e.scrollDeltaX; ps.dy += e.scrollDeltaY }
+                main.removeCallbacks(flushRunnable); main.postDelayed(flushRunnable, 300)
+            }
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                if (e.isPassword) return
+                flushScroll()
+                pendingText = e.text.joinToString("")
+                pendingTextAt = now
+                main.removeCallbacks(flushRunnable); main.postDelayed(flushRunnable, 600)
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun boundsOf(e: AccessibilityEvent): Rect? {
+        val src = e.source ?: return null
+        val r = Rect()
+        src.getBoundsInScreen(r)
+        if (Build.VERSION.SDK_INT < 33) src.recycle()
+        return if (r.isEmpty) null else r
+    }
+
+    private fun add(a: Action, at: Long) {
+        recorded.add(a.copy(delay = delayFrom(at)))
+        lastEventTime = at
+        setStatus("Recorded ${recorded.size} steps (${a.type})")
+    }
+
+    private fun flushScroll() {
+        val ps = pendingScroll ?: return
+        pendingScroll = null
+        if (ps.dx == 0 && ps.dy == 0) return
+        val (dxF, dyF) = if (Math.abs(ps.dy) >= Math.abs(ps.dx)) 0f to (if (ps.dy > 0) 0.3f else -0.3f)
+        else (if (ps.dx > 0) 0.3f else -0.3f) to 0f
+        val cx = ps.bounds.exactCenterX(); val cy = ps.bounds.exactCenterY()
+        val w = ps.bounds.width().toFloat(); val h = ps.bounds.height().toFloat()
+        val a = Action("swipe", x = cx + dxF * w, y = cy + dyF * h, x2 = cx - dxF * w, y2 = cy - dyF * h, duration = 350)
+        add(a, ps.startedAt)
+    }
+
+    private fun flushText() {
+        val t = pendingText ?: return
+        pendingText = null
+        add(Action("text", text = t), pendingTextAt)
     }
 
     private fun recordGlobal(type: String) {

@@ -29,7 +29,9 @@ class AutomationService : AccessibilityService() {
         instance = this
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event != null) overlay?.onAccessibilityEvent(event)
+    }
 
     override fun onInterrupt() {}
 

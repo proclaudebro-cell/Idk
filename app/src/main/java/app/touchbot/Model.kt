@@ -154,6 +154,10 @@ class Prefs(context: Context) {
     var lastGoal: String
         get() = sp.getString("lastGoal", "") ?: ""
         set(v) = sp.edit().putString("lastGoal", v).apply()
+    /** Precise mode swallows touches and re-injects them (delayed); live mode is instant. */
+    var precise: Boolean
+        get() = sp.getBoolean("precise", false)
+        set(v) = sp.edit().putBoolean("precise", v).apply()
     var panelX: Int
         get() = sp.getInt("panelX", 24)
         set(v) = sp.edit().putInt("panelX", v).apply()

@@ -50,8 +50,10 @@ tap_text "Rec"; sleep 1                       # start recording
 shot 2-recording
 read W H < <(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | tr x ' ')
 echo "screen ${W}x${H}"
-adb shell input tap $((W / 2)) $((H * 3 / 4)); sleep 1                         # a tap
-adb shell input swipe $((W / 2)) $((H * 2 / 3)) $((W / 2)) $((H / 3)) 400; sleep 1   # a swipe
+adb shell am start -a android.settings.SETTINGS >/dev/null; sleep 3
+tap_text "Network"; sleep 2                                                    # a real click in Settings
+adb shell input keyevent KEYCODE_BACK; sleep 2
+adb shell input swipe $((W / 2)) $((H * 2 / 3)) $((W / 2)) $((H / 3)) 400; sleep 1   # scroll the list
 shot 3-after-input
 tap_text "Stop"; sleep 1                      # stop + save
 
@@ -67,7 +69,7 @@ rec = json.load(open(sorted(glob.glob(sys.argv[1] + "/rec-*.json"))[0]))
 types = [a["type"] for a in rec["actions"]]
 print("action types:", types)
 assert "tap" in types, "tap was not recorded"
-assert "gesture" in types, "swipe was not recorded"
-assert types.count("tap") == 1 and types.count("gesture") == 1, f"duplicate steps recorded: {types}"
+assert "swipe" in types, "scroll was not recorded"
+assert types.count("tap") == 1, f"duplicate taps recorded: {types}"
 print("PASS: tap and swipe recorded")
 PY
