@@ -1,0 +1,14 @@
+<!DOCTYPE html><meta charset="utf-8">
+<style>
+body{width:280px;margin:0;padding:14px;font:14px system-ui;background:#0f1115;color:#e8eaf0}
+h1{font-size:16px;margin:0 0 10px}label{display:grid;gap:3px;margin:10px 0}
+output{float:right;color:#5b8cff}input[type=range]{width:100%}.sw{display:flex;gap:8px;align-items:center}
+small{color:#8b93a7}
+</style>
+<h1>⏭ SkipIt</h1>
+<label class="sw"><input id="enabled" type="checkbox"> Skip silence (Alt+S)</label>
+<label>Silence threshold <output id="o_threshold"></output><input id="threshold" type="range" min="-60" max="-20" step="1"></label>
+<label>Wait before skipping <output id="o_minSilence"></output><input id="minSilence" type="range" min="0.1" max="2" step="0.05"></label>
+<label>Speed during silence <output id="o_silenceSpeed"></output><input id="silenceSpeed" type="range" min="2" max="16" step="1"></label>
+<small>Louder background noise? Raise the threshold toward −30 dB.</small>
+<script src="popup.js"></script>

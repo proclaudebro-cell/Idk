@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "SkipIt – skip silence on any video",
+  "version": "1.0.0",
+  "description": "Live-skips silent/dead-air parts of videos on any website. Free, private, runs locally.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "all_frames": true, "run_at": "document_idle", "js": ["content.js"] }
+  ],
+  "action": { "default_popup": "popup.html", "default_icon": "icon.svg" },
+  "icons": { "128": "icon.svg" }
+}
