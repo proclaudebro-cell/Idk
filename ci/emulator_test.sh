@@ -29,8 +29,7 @@ tap_text() {
     if [ -n "$xy" ]; then echo "tap '$1' at $xy"; adb shell input tap $xy; return 0; fi
     sleep 1
   done
-  echo "FAIL: could not find '$1' on screen"; cp "$OUT/ui.xml" "$OUT/last-ui.xml" || true
-  adb exec-out screencap -p > "$OUT/fail-$RANDOM.png" || true
+  echo "FAIL: could not find '$1' on screen";   adb exec-out screencap -p > "$OUT/fail-$RANDOM.png" || true
   return 1
 }
 shot() { adb exec-out screencap -p > "$OUT/$1.png" || true; }

@@ -3,6 +3,7 @@ name: Emulator test
 on:
   workflow_dispatch:
   push:
+    paths: ['app/**', 'ci/**', 'build.gradle.kts', 'settings.gradle.kts', '.github/workflows/emulator-test.yml']
 
 permissions:
   contents: read

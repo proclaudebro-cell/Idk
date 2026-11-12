@@ -46,7 +46,6 @@ class OverlayController(private val svc: AutomationService) {
     private var extraRow: LinearLayout? = null
     private var scrollRow: LinearLayout? = null
     private var dblRowView: LinearLayout? = null
-    private var modeRow: LinearLayout? = null
     private var modeBtn: TextView? = null
     private var doubleTapArmed = false
     private var dblBtn: TextView? = null
@@ -96,8 +95,7 @@ class OverlayController(private val svc: AutomationService) {
             setStatus(if (prefs.precise) "Precise: exact touch points, but touches are delayed"
             else "Live: no delay, records taps on buttons/lists, scrolls and typing")
         }
-        modeRow = LinearLayout(svc).apply { addView(modeBtn) }
-        p.addView(modeRow)
+        p.addView(modeBtn)
 
         extraRow = LinearLayout(svc).apply { visibility = View.GONE }
         extraRow!!.addView(button("◀ Back", Color.rgb(70, 70, 90)) { recordGlobal("back") })
@@ -132,8 +130,8 @@ class OverlayController(private val svc: AutomationService) {
     }
 
     fun hide() {
-        main.removeCallbacks(flushRunnable)
-        pendingScroll = null; pendingText = null
+        liveRecording = false
+        clearPending()
         svc.setLiveEvents(false)
         runner.cancel()
         agent.cancel()
@@ -164,35 +162,8 @@ class OverlayController(private val svc: AutomationService) {
         pendingScroll = null; pendingText = null
         main.removeCallbacks(flushRunnable)
         if (!prefs.precise) svc.setLiveEvents(true)
-        // Live mode (default) records from accessibility events, so touches reach the app
-        // untouched with zero delay. Precise mode swallows touches and re-injects them.
-        if (prefs.precise) {
-            val view = View(svc).apply {
-                background = GradientDrawable().apply {
-                    setColor(Color.argb(10, 255, 0, 0))
-                    setStroke(dp(3), Color.argb(200, 255, 40, 40))
-                }
-                setOnTouchListener(captureTouchListener())
-            }
-            val lp = overlayParams(
-                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            )
-            if (Build.VERSION.SDK_INT >= 28) {
-                lp.layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
-            capture = view
-            captureLp = lp
-            wm.addView(view, lp)
-            // Put the control panel back above the capture layer so it stays tappable.
-            panel?.let { p ->
-                runCatching { wm.removeView(p) }
-                wm.addView(p, panelLp)
-            }
-        }
+        liveRecording = !prefs.precise
+        if (liveRecording) svc.setLiveEvents(true) else addCaptureLayer()
         mode = Mode.RECORDING
         extraRow?.visibility = View.VISIBLE
         scrollRow?.visibility = View.VISIBLE
@@ -202,9 +173,38 @@ class OverlayController(private val svc: AutomationService) {
         refreshButtons()
     }
 
+    /** Precise mode: a full-screen layer that swallows touches and re-injects them after lift-off. */
+    private fun addCaptureLayer() {
+        val view = View(svc).apply {
+            background = GradientDrawable().apply {
+                setColor(Color.argb(10, 255, 0, 0))
+                setStroke(dp(3), Color.argb(200, 255, 40, 40))
+            }
+            setOnTouchListener(captureTouchListener())
+        }
+        val lp = overlayParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        )
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        capture = view
+        captureLp = lp
+        wm.addView(view, lp)
+        // Put the control panel back above the capture layer so it stays tappable.
+        panel?.let { p ->
+            runCatching { wm.removeView(p) }
+            wm.addView(p, panelLp)
+        }
+    }
+
     private fun stopRecording() {
-        main.removeCallbacks(flushRunnable)
-        flushScroll(); flushText()
+        liveRecording = false
+        flushPending()
         svc.setLiveEvents(false)
         removeCapture()
         extraRow?.visibility = View.GONE
@@ -229,56 +229,77 @@ class OverlayController(private val svc: AutomationService) {
         val bounds: Rect, var dx: Int, var dy: Int, val startedAt: Long, var endedAt: Long,
         var lastX: Int, var lastY: Int,
     )
+    private class PendingText(var text: String, val startedAt: Long, var endedAt: Long)
+
+    private var liveRecording = false
     private var pendingScroll: PendingScroll? = null
-    private var pendingText: String? = null
-    private var pendingTextStart = 0L
-    private var pendingTextEnd = 0L
-    private val flushRunnable = Runnable { flushScroll(); flushText() }
+    private var pendingText: PendingText? = null
+    private val flushRunnable = Runnable { flushPending() }
+    private val handledEvents = AccessibilityEvent.TYPE_VIEW_CLICKED or AccessibilityEvent.TYPE_VIEW_LONG_CLICKED or
+        AccessibilityEvent.TYPE_VIEW_SCROLLED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+
+    private fun clearPending() {
+        main.removeCallbacks(flushRunnable)
+        pendingScroll = null
+        pendingText = null
+    }
+
+    private fun flushPending() {
+        main.removeCallbacks(flushRunnable)
+        flushScroll(); flushText()
+    }
+
+    private fun scheduleFlush(delayMs: Long) {
+        main.removeCallbacks(flushRunnable)
+        main.postDelayed(flushRunnable, delayMs)
+    }
 
     fun onAccessibilityEvent(e: AccessibilityEvent) {
-        if (mode != Mode.RECORDING || prefs.precise) return
+        if (!liveRecording || mode != Mode.RECORDING) return
+        if ((e.eventType and handledEvents) == 0) return   // skip the binder calls below for window events
         if (e.packageName == svc.packageName) return
         val src = e.source ?: return
         try {
             if (src.window?.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) return
             val now = SystemClock.uptimeMillis()
-            val r = Rect().also { src.getBoundsInScreen(it) }
             when (e.eventType) {
                 AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> {
-                    flushScroll(); flushText()
+                    flushPending()
+                    val r = Rect().also { src.getBoundsInScreen(it) }
                     if (r.isEmpty) return
-                    val long = e.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
-                    var a = if (long) Action("long_press", x = r.exactCenterX(), y = r.exactCenterY(), duration = 700)
-                    else Action("tap", x = r.exactCenterX(), y = r.exactCenterY())
-                    if (a.type == "tap" && doubleTapArmed) {
-                        a = Action("double_tap", x = a.x, y = a.y, duration = 120)
-                        setDoubleTapArmed(false)
+                    val type = when {
+                        e.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "long_press"
+                        doubleTapArmed -> "double_tap"
+                        else -> "tap"
                     }
-                    add(a, now)
-                    val (w, h) = svc.screenSize()
-                    if (r.width().toLong() * r.height() > 0.4 * w * h) {
+                    if (type == "double_tap") setDoubleTapArmed(false)
+                    add(Action(type, x = r.exactCenterX(), y = r.exactCenterY(),
+                        duration = when (type) { "long_press" -> 700L; "double_tap" -> 120L; else -> 0L }), now)
+                    if (r.width().toLong() * r.height() > 0.4 * recW * recH) {
                         setStatus("Recorded ${recorded.size} steps - big area tapped, replay hits its centre (use Precise mode for exact spots)")
                     }
                 }
                 AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                     flushText()
+                    val r = Rect().also { src.getBoundsInScreen(it) }
                     if (r.isEmpty) return
                     // API 28+ gives the delta directly; before that, diff the absolute scroll position.
                     val ps = pendingScroll
-                    var dx = if (Build.VERSION.SDK_INT >= 28) e.scrollDeltaX else e.scrollX - (ps?.lastX ?: e.scrollX)
-                    var dy = if (Build.VERSION.SDK_INT >= 28) e.scrollDeltaY else e.scrollY - (ps?.lastY ?: e.scrollY)
+                    val api28 = Build.VERSION.SDK_INT >= 28
+                    val dx = if (api28) e.scrollDeltaX else e.scrollX - (ps?.lastX ?: e.scrollX)
+                    val dy = if (api28) e.scrollDeltaY else e.scrollY - (ps?.lastY ?: e.scrollY)
                     if (ps == null) pendingScroll = PendingScroll(r, dx, dy, now, now, e.scrollX, e.scrollY)
                     else { ps.dx += dx; ps.dy += dy; ps.endedAt = now; ps.lastX = e.scrollX; ps.lastY = e.scrollY }
-                    main.removeCallbacks(flushRunnable); main.postDelayed(flushRunnable, 300)
+                    scheduleFlush(300)
                 }
                 AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                     // Only what the user typed into the focused field, never password or app-driven labels.
                     if (e.isPassword || !src.isEditable || !src.isFocused) return
+                    val text = src.text?.toString() ?: return
                     flushScroll()
-                    if (pendingText == null) pendingTextStart = now
-                    pendingText = src.text?.toString() ?: return
-                    pendingTextEnd = now
-                    main.removeCallbacks(flushRunnable); main.postDelayed(flushRunnable, 600)
+                    val pt = pendingText
+                    if (pt == null) pendingText = PendingText(text, now, now) else { pt.text = text; pt.endedAt = now }
+                    scheduleFlush(600)
                 }
             }
         } finally {
@@ -287,11 +308,18 @@ class OverlayController(private val svc: AutomationService) {
         }
     }
 
-    private fun add(a: Action, start: Long, end: Long = start) {
+    /** Appends a step timed from [start]; the next step's delay is measured from [end]. */
+    private fun add(a: Action, start: Long, end: Long = start, status: String? = null) {
         recorded.add(a.copy(delay = delayFrom(start)))
         lastEventTime = end
-        setStatus("Recorded ${recorded.size} steps (${a.type})")
+        setStatus(status ?: "Recorded ${recorded.size} steps (${a.type})")
     }
+
+    /** A swipe through the centre of a w*h area, moving [dxFrac]/[dyFrac] of its size either side. */
+    private fun swipeAction(cx: Float, cy: Float, w: Float, h: Float, dxFrac: Float, dyFrac: Float) = Action(
+        "swipe", x = cx + dxFrac * w, y = cy + dyFrac * h,
+        x2 = cx - dxFrac * w, y2 = cy - dyFrac * h, duration = 350,
+    )
 
     private fun flushScroll() {
         val ps = pendingScroll ?: return
@@ -303,24 +331,20 @@ class OverlayController(private val svc: AutomationService) {
         val frac = ((if (vertical) Math.abs(ps.dy) / h else Math.abs(ps.dx) / w)).coerceIn(0.1f, 0.8f) / 2f
         val dxF = if (vertical) 0f else if (ps.dx > 0) frac else -frac
         val dyF = if (vertical) (if (ps.dy > 0) frac else -frac) else 0f
-        val cx = ps.bounds.exactCenterX(); val cy = ps.bounds.exactCenterY()
-        val a = Action("swipe", x = cx + dxF * w, y = cy + dyF * h, x2 = cx - dxF * w, y2 = cy - dyF * h, duration = 350)
-        add(a, ps.startedAt, ps.endedAt)
+        add(swipeAction(ps.bounds.exactCenterX(), ps.bounds.exactCenterY(), w, h, dxF, dyF), ps.startedAt, ps.endedAt)
     }
 
     private fun flushText() {
-        val t = pendingText ?: return
+        val pt = pendingText ?: return
         pendingText = null
-        add(Action("text", text = t), pendingTextStart, pendingTextEnd)
+        add(Action("text", text = pt.text), pt.startedAt, pt.endedAt)
     }
 
     private fun recordGlobal(type: String) {
         if (mode != Mode.RECORDING) return
         val now = SystemClock.uptimeMillis()
-        recorded.add(Action(type, delay = delayFrom(now)))
-        lastEventTime = now
+        add(Action(type), now, status = "Recorded $type (${recorded.size + 1} steps)")
         runner.execute(Action(type), recW, recH) {}
-        setStatus("Recorded $type (${recorded.size} steps)")
     }
 
     private fun delayFrom(now: Long): Long {
@@ -411,14 +435,8 @@ class OverlayController(private val svc: AutomationService) {
         if (mode != Mode.RECORDING) return
         val (w, h) = svc.screenSize()
         val cx = w / 2f; val cy = h / 2f
-        val a = Action(
-            "swipe", x = cx + dxFrac * w, y = cy + dyFrac * h,
-            x2 = cx - dxFrac * w, y2 = cy - dyFrac * h, duration = 350,
-        )
-        val now = SystemClock.uptimeMillis()
-        recorded.add(a.copy(delay = delayFrom(now)))
-        lastEventTime = now
-        setStatus("Recorded scroll (${recorded.size} steps)")
+        val a = swipeAction(cx, cy, w.toFloat(), h.toFloat(), dxFrac, dyFrac)
+        add(a, SystemClock.uptimeMillis(), status = "Recorded scroll (${recorded.size + 1} steps)")
         replayThroughCapture(a)
     }
 
@@ -587,7 +605,7 @@ class OverlayController(private val svc: AutomationService) {
     private fun refreshButtons() {
         recBtn?.text = if (mode == Mode.RECORDING) "■ Stop" else "● Rec"
         modeBtn?.text = if (prefs.precise) "Mode: Precise (delays touch)" else "Mode: Live (no delay)"
-        modeRow?.visibility = if (mode == Mode.IDLE) View.VISIBLE else View.GONE
+        modeBtn?.visibility = if (mode == Mode.IDLE) View.VISIBLE else View.GONE
         playBtn?.text = if (mode == Mode.PLAYING) "■ Stop" else "▶ Play"
         aiBtn?.text = if (mode == Mode.AI) "■ Stop" else "✦ AI"
         recBtn?.alpha = if (mode == Mode.IDLE || mode == Mode.RECORDING) 1f else 0.4f
