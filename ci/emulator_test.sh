@@ -37,11 +37,17 @@ shot() { adb exec-out screencap -p > "$OUT/$1.png" || true; }
 adb install -r -t "$APK"
 adb shell settings put secure enabled_accessibility_services "$SVC"
 adb shell settings put secure accessibility_enabled 1
-adb shell am start -n $PKG/.MainActivity
-sleep 3
+# The app only re-reads the service state in onResume, and Android takes a few seconds to bind a
+# freshly enabled service, so reopen the app until it reports the service as running.
 ok=0
-for i in $(seq 1 15); do dump || true; grep -q "service is running" "$OUT/ui.xml" && ok=1 && break; sleep 1; done
-[ $ok = 1 ] || { shot service-off; echo "FAIL: accessibility service did not start"; exit 1; }
+for i in $(seq 1 12); do
+  adb shell input keyevent KEYCODE_HOME; sleep 1
+  adb shell am start -n $PKG/.MainActivity >/dev/null; sleep 3
+  dump || true
+  if grep -q "service is running" "$OUT/ui.xml"; then ok=1; break; fi
+  echo "service not running yet (attempt $i)"
+done
+[ $ok = 1 ] || { shot service-off; adb shell dumpsys accessibility | head -40 > "$OUT/dumpsys-a11y.txt"; echo "FAIL: accessibility service did not start"; exit 1; }
 echo "PASS: accessibility service running"; shot 1-main
 
 read W H < <(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | tr x ' ')
