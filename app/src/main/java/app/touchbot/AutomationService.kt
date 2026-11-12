@@ -27,6 +27,18 @@ class AutomationService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        setLiveEvents(false)
+    }
+
+    /** View click/scroll/text events (and no throttling) are only requested while recording live. */
+    fun setLiveEvents(on: Boolean) {
+        val info = serviceInfo ?: return
+        val base = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        info.eventTypes = if (on) base or AccessibilityEvent.TYPE_VIEW_CLICKED or
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED or AccessibilityEvent.TYPE_VIEW_SCROLLED or
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED else base
+        info.notificationTimeout = if (on) 0 else 100
+        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

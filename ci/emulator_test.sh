@@ -45,31 +45,64 @@ for i in $(seq 1 15); do dump || true; grep -q "service is running" "$OUT/ui.xml
 [ $ok = 1 ] || { shot service-off; echo "FAIL: accessibility service did not start"; exit 1; }
 echo "PASS: accessibility service running"; shot 1-main
 
-tap_text "Show floating controls"; sleep 2
-tap_text "Rec"; sleep 1                       # start recording
-shot 2-recording
 read W H < <(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | tr x ' ')
 echo "screen ${W}x${H}"
-adb shell am start -a android.settings.SETTINGS >/dev/null; sleep 3
-tap_text "Network"; sleep 2                                                    # a real click in Settings
-adb shell input keyevent KEYCODE_BACK; sleep 2
-adb shell input swipe $((W / 2)) $((H * 2 / 3)) $((W / 2)) $((H / 3)) 400; sleep 1   # scroll the list
-shot 3-after-input
-tap_text "Stop"; sleep 1                      # stop + save
 
-rm -f "$OUT"/rec-*.json
-FILES=$(adb shell run-as $PKG ls files/recordings | tr -d '\r')
-echo "recordings: $FILES"
-[ -n "$FILES" ] || { echo "FAIL: no recording saved"; exit 1; }
-for f in $FILES; do adb shell run-as $PKG cat "files/recordings/$f" > "$OUT/rec-$f"; done
-cat "$OUT"/rec-*.json; echo
-python3 - "$OUT" <<'PY'
-import glob, json, sys
-rec = json.load(open(sorted(glob.glob(sys.argv[1] + "/rec-*.json"))[0]))
-types = [a["type"] for a in rec["actions"]]
-print("action types:", types)
-assert "tap" in types, "tap was not recorded"
-assert "swipe" in types, "scroll was not recorded"
-assert types.count("tap") == 1, f"duplicate taps recorded: {types}"
-print("PASS: tap and swipe recorded")
+# Taps the first clickable, labelled row of the Settings app (works whatever the image's labels are).
+tap_settings_row() {
+  dump
+  xy=$(python3 - "$OUT/ui.xml" <<'PY'
+import re, sys, xml.etree.ElementTree as ET
+for n in ET.parse(sys.argv[1]).iter("node"):
+    if n.get("package") == "com.android.settings" and n.get("clickable") == "true" and n.get("text"):
+        l, t, r, b = map(int, re.findall(r"\d+", n.get("bounds")))
+        if r - l > 300 and t > 300:
+            print((l + r) // 2, (t + b) // 2); break
 PY
+)
+  [ -n "$xy" ] || { echo "FAIL: no clickable Settings row"; shot no-row; return 1; }
+  echo "tap settings row at $xy"; adb shell input tap $xy
+}
+
+# Checks the newest saved recording against a python expression over `types` (list of action types).
+check_latest() {
+  local label=$1 expr=$2
+  local f; f=$(adb shell run-as $PKG ls -t files/recordings | tr -d '\r' | head -1)
+  [ -n "$f" ] || { echo "FAIL[$label]: no recording saved"; exit 1; }
+  adb shell run-as $PKG cat "files/recordings/$f" > "$OUT/rec-$label.json"
+  cat "$OUT/rec-$label.json"; echo
+  python3 - "$OUT/rec-$label.json" "$label" "$expr" <<'PY'
+import json, sys
+rec = json.load(open(sys.argv[1])); label, expr = sys.argv[2], sys.argv[3]
+types = [a["type"] for a in rec["actions"]]
+print(f"[{label}] action types:", types)
+assert eval(expr), f"[{label}] check failed: {expr}"
+print(f"PASS[{label}]: {expr}")
+PY
+}
+
+tap_text "Show floating controls"; sleep 2
+
+# ---- Phase 1: Live mode (default): real click + scroll inside Settings ----
+tap_text "Mode: Live" >/dev/null 2>&1 && { echo "toggled live->precise by mistake"; } || true
+dump; grep -q "Mode: Live" "$OUT/ui.xml" || { shot not-live; echo "FAIL: panel not in Live mode by default"; exit 1; }
+tap_text "Rec"; sleep 1
+adb shell am start -a android.settings.SETTINGS >/dev/null; sleep 3
+tap_settings_row; sleep 2
+adb shell input keyevent KEYCODE_BACK; sleep 2
+adb shell input swipe $((W / 2)) $((H * 2 / 3)) $((W / 2)) $((H / 3)) 400; sleep 1
+shot 3-live
+tap_text "Stop"; sleep 1
+check_latest live '"tap" in types and types.count("tap") == 1 and "swipe" in types'
+
+# ---- Phase 2: Precise mode: raw tap + swipe anywhere (home screen) ----
+adb shell input keyevent KEYCODE_HOME; sleep 1
+tap_text "Mode: Live"; sleep 1
+dump; grep -q "Mode: Precise" "$OUT/ui.xml" || { shot not-precise; echo "FAIL: could not switch to Precise mode"; exit 1; }
+tap_text "Rec"; sleep 1
+adb shell input tap $((W / 2)) $((H * 3 / 4)); sleep 1
+adb shell input swipe $((W / 2)) $((H * 2 / 3)) $((W / 2)) $((H / 3)) 400; sleep 1
+shot 4-precise
+tap_text "Stop"; sleep 1
+check_latest precise '"tap" in types and types.count("tap") == 1 and "gesture" in types'
+echo "ALL PASS"
