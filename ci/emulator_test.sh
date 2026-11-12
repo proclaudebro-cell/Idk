@@ -84,7 +84,6 @@ PY
 tap_text "Show floating controls"; sleep 2
 
 # ---- Phase 1: Live mode (default): real click + scroll inside Settings ----
-tap_text "Mode: Live" >/dev/null 2>&1 && { echo "toggled live->precise by mistake"; } || true
 dump; grep -q "Mode: Live" "$OUT/ui.xml" || { shot not-live; echo "FAIL: panel not in Live mode by default"; exit 1; }
 tap_text "Rec"; sleep 1
 adb shell am start -a android.settings.SETTINGS >/dev/null; sleep 3
