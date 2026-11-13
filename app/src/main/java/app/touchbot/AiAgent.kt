@@ -4,8 +4,6 @@ import android.os.Handler
 import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -55,6 +53,7 @@ class AiAgent(private val svc: AutomationService, private val runner: ActionRunn
         var lastResultBlock: JSONObject? = null
         var pendingToolId: String? = null
         var feedback = "Task started."
+        var misses = 0
 
         for (step in 1..MAX_STEPS) {
             if (cancelled) return Result(false, "Stopped", executed, w, h)
@@ -85,15 +84,21 @@ class AiAgent(private val svc: AutomationService, private val runner: ActionRunn
             status(onStatus, "AI step $step: thinking")
             val reply = callApi(apiKey, model, messages)
             if (cancelled) return Result(false, "Stopped", executed, w, h)
-            val assistantContent = reply.getJSONArray("content")
-            messages.put(JSONObject().put("role", "assistant").put("content", assistantContent))
-
-            var toolUse: JSONObject? = null
-            for (i in 0 until assistantContent.length()) {
-                val b = assistantContent.getJSONObject(i)
-                if (b.getString("type") == "tool_use") { toolUse = b; break }
+            if (reply.optString("stop_reason") == "refusal") {
+                return Result(false, "The AI declined this request", executed, w, h)
             }
-            if (toolUse == null) return Result(false, "The AI did not choose an action", executed, w, h)
+            val assistantContent = ClaudeApi.withoutThinking(reply.getJSONArray("content"))
+            val toolUse = ClaudeApi.firstBlock(assistantContent, "tool_use")
+            if (toolUse == null) {
+                if (++misses > 2) return Result(false, "The AI did not choose an action", executed, w, h)
+                if (assistantContent.length() == 0) assistantContent.put(textBlock("(no action)"))
+                messages.put(JSONObject().put("role", "assistant").put("content", assistantContent))
+                pendingToolId = null
+                feedback = "You must respond by calling the act tool (use done or fail to finish)."
+                continue
+            }
+            misses = 0
+            messages.put(JSONObject().put("role", "assistant").put("content", assistantContent))
             pendingToolId = toolUse.getString("id")
             val input = toolUse.getJSONObject("input")
             val kind = input.optString("action")
@@ -174,56 +179,23 @@ class AiAgent(private val svc: AutomationService, private val runner: ActionRunn
         return ok
     }
 
-    private fun textBlock(t: String) = JSONObject().put("type", "text").put("text", t)
+    private fun textBlock(t: String) = ClaudeApi.textBlock(t)
 
-    private fun imageBlock(s: Screenshot) = JSONObject().put("type", "image").put(
-        "source",
-        JSONObject().put("type", "base64").put("media_type", "image/jpeg").put("data", s.base64),
-    )
+    private fun imageBlock(s: Screenshot) = ClaudeApi.imageBlock(s.base64)
 
     private fun callApi(apiKey: String, model: String, messages: JSONArray): JSONObject {
+        // Forced tool choice is rejected by current models, so the tool is requested via the prompt.
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", 1024)
+            .put("max_tokens", 4096)
             .put("system", SYSTEM_PROMPT)
             .put("tools", JSONArray().put(TOOL))
-            .put("tool_choice", JSONObject().put("type", "any").put("disable_parallel_tool_use", true))
+            .put("tool_choice", JSONObject().put("type", "auto").put("disable_parallel_tool_use", true))
             .put("messages", messages)
-            .toString()
-
-        var lastError = "unknown error"
-        for (attempt in 0 until 4) {
-            if (cancelled) throw IllegalStateException("Stopped")
-            val conn = URL(API_URL).openConnection() as HttpURLConnection
-            try {
-                conn.requestMethod = "POST"
-                conn.connectTimeout = 20000
-                conn.readTimeout = 90000
-                conn.doOutput = true
-                conn.setRequestProperty("content-type", "application/json")
-                conn.setRequestProperty("x-api-key", apiKey)
-                conn.setRequestProperty("anthropic-version", "2023-06-01")
-                conn.outputStream.use { it.write(body.toByteArray()) }
-                val code = conn.responseCode
-                val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                if (code in 200..299) return JSONObject(text)
-                lastError = try {
-                    JSONObject(text).getJSONObject("error").getString("message")
-                } catch (e: Exception) { "HTTP $code" }
-                if (code != 429 && code != 529 && code < 500) throw IllegalStateException("API error: $lastError")
-            } catch (e: java.io.IOException) {
-                lastError = e.message ?: "network error"
-            } finally {
-                conn.disconnect()
-            }
-            Thread.sleep(1500L * (attempt + 1))
-        }
-        throw IllegalStateException("API failed: $lastError")
+        return ClaudeApi.call(apiKey, body, cancelled = { cancelled })
     }
 
     companion object {
-        private const val API_URL = "https://api.anthropic.com/v1/messages"
         private const val MAX_STEPS = 40
         private const val MAX_DIM = 1024
         private const val SETTLE_MS = 900L
@@ -231,6 +203,7 @@ class AiAgent(private val svc: AutomationService, private val runner: ActionRunn
         private const val SYSTEM_PROMPT =
             "You operate an Android phone for the user through a tool that performs one UI action at a time. " +
                 "After every action you receive the new screen as a numbered element list and a screenshot. " +
+                "Always respond by calling the act tool, exactly once per turn. " +
                 "Work toward the user's goal in as few steps as possible. Prefer tap_node with an element id over raw " +
                 "coordinates; use coordinates only for things missing from the list (they are in the screenshot's " +
                 "pixel space). To type, first tap the text field, then use type_text (it replaces the field's " +

@@ -23,6 +23,8 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var statusText: TextView
     private lateinit var listBox: LinearLayout
+    private lateinit var gameBox: LinearLayout
+    private lateinit var games: GameStore
     private lateinit var keyField: EditText
     private lateinit var modelField: EditText
     private lateinit var loopsField: EditText
@@ -35,6 +37,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         store = RecordingStore(this)
+        games = GameStore(java.io.File(filesDir, "games"))
 
         val scroll = ScrollView(this)
         root = LinearLayout(this).apply {
@@ -45,7 +48,10 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         root.addView(title("TouchBot"))
-        root.addView(body("Record taps and swipes, replay them on a loop, or tell the AI what to do."))
+        root.addView(body(
+            "Record taps and swipes, replay them on a loop, tell the AI what to do, or let it " +
+                "watch you play a game, study it and play for you."
+        ))
 
         statusText = body("")
         root.addView(statusText)
@@ -73,9 +79,19 @@ class MainActivity : Activity() {
         root.addView(modelField)
         root.addView(small(
             "The key stays on this device. While the AI runs, the screen text and a screenshot are " +
-                "sent to Anthropic. Tap ✦ AI in the floating controls to give it a task."
+                "sent to Anthropic. Tap ✦ AI in the floating controls to give it a task. 📖 Study sends " +
+                "the game's name to research it; 🎮 Auto sends a screenshot only when it meets a screen " +
+                "it has not seen you play."
         ))
         root.addView(button("Save settings") { saveSettings(); toast("Saved") })
+
+        root.addView(section("Games"))
+        root.addView(small(
+            "Open a game, then use the floating controls: 👁 Watch while you play (the more the better), " +
+                "📖 Study to research the game online, 🎮 Auto to let TouchBot play. Tap a game for details."
+        ))
+        gameBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(gameBox)
 
         root.addView(section("Recordings"))
         root.addView(small("Tap to select what ▶ Play runs. Long-press to rename or delete."))
@@ -117,6 +133,30 @@ class MainActivity : Activity() {
         statusText.text = if (on) "✅ Accessibility service is running" else "⚠ Accessibility service is off"
         statusText.setTextColor(if (on) Color.rgb(30, 130, 60) else Color.rgb(190, 90, 20))
 
+        gameBox.removeAllViews()
+        val profiles = games.list()
+        if (profiles.isEmpty()) gameBox.addView(small("No games learned yet."))
+        for (g in profiles) {
+            val learned = if (g.moves > 0) {
+                "${g.moves} moves learned" + if (g.agreement >= 0) " (${g.agreement}% match)" else ""
+            } else "not watched yet"
+            val row = TextView(this).apply {
+                text = "${g.label}\n$learned · " + if (g.guide.isBlank()) "not studied" else "studied"
+                textSize = 15f
+                setTextColor(Color.BLACK)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(240, 240, 240))
+                    cornerRadius = 10 * d
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { setMargins(0, dp(4), 0, dp(4)) }
+                setOnClickListener { showGame(g) }
+            }
+            gameBox.addView(row)
+        }
+
         listBox.removeAllViews()
         val recs = store.list()
         if (recs.isEmpty()) listBox.addView(small("No recordings yet."))
@@ -139,6 +179,17 @@ class MainActivity : Activity() {
             }
             listBox.addView(row)
         }
+    }
+
+    private fun showGame(g: GameProfile) {
+        val text = (if (g.moves > 0) "Learned ${g.moves} moves from ${g.moments} moments you played.\n\n" else "") +
+            if (g.guide.isBlank()) "No guide yet - open the game and tap 📖 Study." else g.guide
+        AlertDialog.Builder(this)
+            .setTitle(g.label)
+            .setMessage(text)
+            .setPositiveButton("Close", null)
+            .setNegativeButton("Forget this game") { _, _ -> games.delete(g.pkg); refresh() }
+            .show()
     }
 
     private fun manage(r: Recording) {

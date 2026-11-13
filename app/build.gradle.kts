@@ -34,4 +34,6 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    // The android.jar used by unit tests only has stubs for org.json.
+    testImplementation("org.json:json:20240303")
 }

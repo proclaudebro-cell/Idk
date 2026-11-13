@@ -43,6 +43,7 @@ class AutomationService : AccessibilityService() {
     override fun onDestroy() {
         overlay?.hide()
         if (instance === this) instance = null
+        shotExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -155,35 +156,41 @@ class AutomationService : AccessibilityService() {
         return ScreenDump(sb.toString(), centers)
     }
 
-    /** Captures the screen as a JPEG scaled by [scale]. Blocks; call from a worker thread. */
-    fun screenshot(scale: Float): Screenshot? {
+    private val shotExecutor = Executors.newSingleThreadExecutor()
+
+    /** Error code of the last failed [captureBitmap], or 0. 3 means "asked again too soon". */
+    @Volatile var lastShotError = 0
+        private set
+
+    /**
+     * Captures the screen as a full-size software bitmap. Blocks; call from a worker thread.
+     * The caller must recycle the result.
+     */
+    fun captureBitmap(): Bitmap? {
         if (Build.VERSION.SDK_INT < 30) return null
         val latch = CountDownLatch(1)
-        var result: Screenshot? = null
+        var result: Bitmap? = null
         try {
             takeScreenshot(
-                Display.DEFAULT_DISPLAY, Executors.newSingleThreadExecutor(),
+                Display.DEFAULT_DISPLAY, shotExecutor,
                 object : TakeScreenshotCallback {
                     override fun onSuccess(shot: ScreenshotResult) {
                         try {
                             val hw = Bitmap.wrapHardwareBuffer(shot.hardwareBuffer, shot.colorSpace)
                             if (hw != null) {
-                                val soft = hw.copy(Bitmap.Config.ARGB_8888, false)
-                                val w = (soft.width * scale).toInt().coerceAtLeast(1)
-                                val h = (soft.height * scale).toInt().coerceAtLeast(1)
-                                val scaled = Bitmap.createScaledBitmap(soft, w, h, true)
-                                val out = ByteArrayOutputStream()
-                                scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
-                                result = Screenshot(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), w, h)
+                                result = hw.copy(Bitmap.Config.ARGB_8888, false)
+                                hw.recycle()
                             }
                             shot.hardwareBuffer.close()
-                        } catch (e: Exception) {
+                            lastShotError = 0
+                        } catch (e: Throwable) {
                             // fall through with null result
                         }
                         latch.countDown()
                     }
 
                     override fun onFailure(errorCode: Int) {
+                        lastShotError = errorCode
                         latch.countDown()
                     }
                 },
@@ -195,8 +202,53 @@ class AutomationService : AccessibilityService() {
         return result
     }
 
+    /** Captures the screen as a JPEG scaled by [scale]. Blocks; call from a worker thread. */
+    fun screenshot(scale: Float): Screenshot? {
+        val bmp = captureBitmap() ?: return null
+        return try { toJpeg(bmp, scale) } finally { bmp.recycle() }
+    }
+
+    fun toJpeg(bmp: Bitmap, scale: Float): Screenshot? = try {
+        val w = (bmp.width * scale).toInt().coerceAtLeast(1)
+        val h = (bmp.height * scale).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 70, out)
+        if (scaled !== bmp) scaled.recycle()
+        Screenshot(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), w, h)
+    } catch (e: Throwable) {
+        null
+    }
+
+    /** Shrinks [bmp] and reduces it to a [Features] fingerprint. */
+    fun fingerprint(bmp: Bitmap, mask: FloatArray?): ByteArray? = try {
+        val k = FRAME_DIM.toFloat() / maxOf(bmp.width, bmp.height)
+        val w = (bmp.width * k).toInt().coerceAtLeast(Features.GRID)
+        val h = (bmp.height * k).toInt().coerceAtLeast(Features.GRID)
+        val small = Bitmap.createScaledBitmap(bmp, w, h, true)
+        val px = IntArray(w * h)
+        small.getPixels(px, 0, w, 0, 0, w, h)
+        if (small !== bmp) small.recycle()
+        Features.fromPixels(px, w, h, mask)
+    } catch (e: Throwable) {
+        null
+    }
+
+    /** Package of the app the user is looking at, or null if it cannot be determined. */
+    fun foregroundPackage(): String? {
+        val pkg = try { rootInActiveWindow?.packageName?.toString() } catch (e: Exception) { null }
+        return pkg?.takeIf { it.isNotEmpty() && it != packageName }
+    }
+
+    fun appLabel(pkg: String): String = try {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (e: Exception) {
+        pkg
+    }
+
     companion object {
         private const val MAX_NODES = 220
+        private const val FRAME_DIM = 144
 
         @Volatile
         var instance: AutomationService? = null
