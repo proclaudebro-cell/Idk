@@ -181,6 +181,14 @@ class FloatingPlayerWindow(
     private var controlsVisible = true
     private var panelOpen = false
     private var animator: ValueAnimator? = null
+    private var pageTouch = false
+    private val pageTouchBar = Ui.text(ctx, "Touching the TikTok page  ·  Done", 12f, Color.BLACK, bold = true).apply {
+        gravity = Gravity.CENTER
+        background = Ui.rounded(Ui.ACCENT, dp(14).toFloat())
+        setPadding(dp(12), dp(6), dp(12), dp(6))
+        visibility = View.GONE
+        setOnClickListener { setPageTouch(false) }
+    }
     private val locked get() = prefs.positionLocked
     private val audioOnly get() = prefs.audioOnly
 
@@ -207,6 +215,7 @@ class FloatingPlayerWindow(
         root.addView(controls, FrameLayout.LayoutParams(match, match))
         root.addView(audioBar, FrameLayout.LayoutParams(match, match))
         root.addView(panel, FrameLayout.LayoutParams(match, match))
+        root.addView(pageTouchBar, FrameLayout.LayoutParams(wrap, wrap, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(6) })
 
         controls.addView(scrimTop, FrameLayout.LayoutParams(match, dp(64), Gravity.TOP))
         controls.addView(scrimBottom, FrameLayout.LayoutParams(match, dp(72), Gravity.BOTTOM))
@@ -303,6 +312,7 @@ class FloatingPlayerWindow(
         row("Audio only", { onOff(prefs.audioOnly) }) { closePanel(); setAudioOnly(!prefs.audioOnly) }
         row("Mute", { onOff(prefs.muted) }) { prefs.muted = !prefs.muted; controller.applySettings() }
         row("Lock size & position", { onOff(prefs.positionLocked) }) { toggleLock() }
+        row("Touch TikTok page (pop-ups)", { if (pageTouch) "On" else "Off" }) { closePanel(); setPageTouch(!pageTouch) }
         row("Open FloatTok", { "›" }) { closePanel(); host.openApp(false) }
     }
 
@@ -416,6 +426,7 @@ class FloatingPlayerWindow(
         content.removeAllViews()
         content.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         backend.setViewport(box.w, box.h)
+        backend.setTouchPassthrough(pageTouch)
     }
 
     override fun onStateChanged() = refreshControls()
@@ -544,6 +555,23 @@ class FloatingPlayerWindow(
         if (audioOnly != (audioBar.visibility == View.VISIBLE)) setAudioOnly(audioOnly, fromSettings = true)
         refreshControls()
         layoutForSize(box.w, box.h)
+    }
+
+    /**
+     * Passes touches straight to the TikTok page so the user can answer something it shows (cookie consent,
+     * "tap to play"). Moving and resizing are paused until Done is tapped.
+     */
+    fun setPageTouch(on: Boolean) {
+        pageTouch = on
+        controller.backend?.setTouchPassthrough(on)
+        pageTouchBar.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) {
+            main.removeCallbacks(hideControlsRunnable)
+            controlsVisible = false
+            controls.visibility = View.INVISIBLE
+        } else {
+            showControls()
+        }
     }
 
     // ---------------------------------------------------------------- maximize / audio-only
@@ -716,6 +744,13 @@ class FloatingPlayerWindow(
     }
 
     private fun onDown(ev: MotionEvent) {
+        if (docked) {
+            // Mid-dock (the window is still sliding out): let the animation finish hiding it.
+            g = G.NONE
+            downOnInteractive = false
+            downNoSteal = true
+            return
+        }
         animator?.cancel()
         downRawX = ev.rawX
         downRawY = ev.rawY
@@ -758,6 +793,7 @@ class FloatingPlayerWindow(
     }
 
     private fun gesture(ev: MotionEvent) {
+        if (docked) return
         addRaw(ev)
         val dx = (ev.rawX - downRawX).roundToInt()
         val dy = (ev.rawY - downRawY).roundToInt()
@@ -838,6 +874,7 @@ class FloatingPlayerWindow(
 
     inner class RootLayout : FrameLayout(ctx) {
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (pageTouch) return false
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     onDown(ev)
@@ -859,6 +896,7 @@ class FloatingPlayerWindow(
         }
 
         override fun onTouchEvent(ev: MotionEvent): Boolean {
+            if (pageTouch) return true
             if (ev.actionMasked == MotionEvent.ACTION_DOWN && g == G.NONE) onDown(ev)
             gesture(ev)
             return true

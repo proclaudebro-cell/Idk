@@ -33,9 +33,10 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
 
     private val main = Handler(Looper.getMainLooper())
     private val density = context.resources.displayMetrics.density
+    private var passthrough = false
     private val container = object : FrameLayout(context) {
-        // All touches are handled by the floating window; the page never receives them.
-        override fun onInterceptTouchEvent(ev: android.view.MotionEvent?) = true
+        // Normally the floating window handles every touch and the page never receives them.
+        override fun onInterceptTouchEvent(ev: android.view.MotionEvent?) = !passthrough
     }.apply { setBackgroundColor(Color.BLACK) }
     private var web: WebView = createWebView()
 
@@ -314,6 +315,8 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
         w.scaleX = scale
         w.scaleY = scale
     }
+
+    override fun setTouchPassthrough(enabled: Boolean) { passthrough = enabled }
 
     override fun stop() {
         token++

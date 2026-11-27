@@ -28,6 +28,9 @@ interface PlayerBackend {
     /** The size of the area the video is shown in, in px (the window content size). */
     fun setViewport(width: Int, height: Int) {}
 
+    /** Lets touches reach the page itself (e.g. to dismiss a consent banner). Off by default. */
+    fun setTouchPassthrough(enabled: Boolean) {}
+
     /** Stops playback and frees the current item but keeps the engine reusable. */
     fun stop()
 
