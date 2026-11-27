@@ -1,0 +1,78 @@
+name: FloatTok
+
+on:
+  push:
+    paths:
+      - "FloatTok/**"
+      - ".github/workflows/floattok.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: FloatTok
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Lint
+        run: ./gradlew --no-daemon lintDebug
+      - name: Lint report
+        if: always()
+        run: cat app/build/reports/lint-results-debug.txt || true
+      - name: Build APKs
+        run: ./gradlew --no-daemon assembleDebug assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FloatTok-apks
+          path: |
+            FloatTok/app/build/outputs/apk/debug/app-debug.apk
+            FloatTok/app/build/outputs/apk/release/app-release.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FloatTok-reports
+          path: FloatTok/app/build/reports/
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: FloatTok-apks
+          path: apks
+      - name: Python imaging for log screenshots
+        run: pip install --quiet pillow
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Smoke test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash FloatTok/ci/emulator-smoke.sh apks/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: FloatTok-emulator
+          path: ci-out/

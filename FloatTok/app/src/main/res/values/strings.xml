@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FloatTok</string>
+    <string name="share_label">FloatTok</string>
+    <string name="channel_playback">Floating playback</string>
+</resources>

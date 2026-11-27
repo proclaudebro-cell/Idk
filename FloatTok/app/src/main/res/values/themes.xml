@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.FloatTok" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">@color/ft_accent</item>
+        <item name="android:colorPrimary">@color/ft_bg</item>
+        <item name="android:colorPrimaryDark">@color/ft_bg</item>
+        <item name="android:colorBackground">@color/ft_bg</item>
+        <item name="android:windowBackground">@color/ft_bg</item>
+        <item name="android:textColorPrimary">@color/ft_text</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+    <style name="Theme.FloatTok.Sheet" parent="Theme.FloatTok">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.InputMethod</item>
+    </style>
+</resources>
