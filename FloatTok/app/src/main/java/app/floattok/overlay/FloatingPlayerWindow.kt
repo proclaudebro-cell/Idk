@@ -165,7 +165,7 @@ class FloatingPlayerWindow(
         title = "FloatTok player"
         fitInsetsTypes = 0
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-        if (Build.VERSION.SDK_INT >= 33) setCanPlayMoveAnimation(false)
+        if (Build.VERSION.SDK_INT >= 34) setCanPlayMoveAnimation(false)
     }
 
     var box = Box(0, 0, 1, 1)

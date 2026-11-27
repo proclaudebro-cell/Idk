@@ -68,6 +68,8 @@ class TikTokWebActivity : Activity() {
         if (web.canGoBack()) web.goBack() else finish()
     }
 
+    // Only reached below Android 13; newer versions use the OnBackInvokedCallback registered in onCreate.
+    @SuppressLint("GestureBackNavigation")
     @Deprecated("Used below Android 13 only")
     override fun onBackPressed() = goBack()
 
