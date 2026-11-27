@@ -206,8 +206,12 @@ for attempt in 1 2; do
   PX=$(win "FloatTok player"); [ "$PX" = "none" ] && break
 done
 echo "after close: $PX"
-SVC=$(adb shell dumpsys activity services $PKG | grep -c "ServiceRecord" || true)
+sleep 3
+SVC=$(adb shell dumpsys activity services $PKG/.overlay.OverlayService | grep -c "ServiceRecord" || true)
 [ "$PX" = "none" ] && [ "$SVC" = "0" ] && pass "close removes window and stops the service" || fail "close (window: $PX, services: $SVC)"
+
+log "MediaPlayer log"
+adb logcat -d | grep -iE "MediaPlayer|NuPlayer|GenericSource|HTTPLive" | tail -15
 
 log "Crashes"
 CR=$(adb logcat -d -b crash)

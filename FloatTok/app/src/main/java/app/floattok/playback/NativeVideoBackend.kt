@@ -132,6 +132,7 @@ class NativeVideoBackend(private val context: Context) : PlayerBackend, TextureV
             else p.setDataSource(context, uri, mapOf("User-Agent" to Net.userAgent(context)))
             surface?.let { p.setSurface(it) }
             p.prepareAsync()
+            main.postDelayed({ if (mp === p && !prepared) listener?.onError("This video took too long to load.") }, 30_000)
         } catch (e: Exception) {
             listener?.onError("Can't open this video: ${e.message ?: e.javaClass.simpleName}")
         }

@@ -188,13 +188,13 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
                 if (o.optBoolean("p")) setPlaying(true)
             }
             "v:play", "v:playing" -> { listener?.onBuffering(false); setPlaying(true) }
-            "v:pause" -> obj(json)?.let { if (!it.optBoolean("e")) setPlaying(false) }
+            "v:pause" -> obj(json)?.let { if (!it.optBoolean("e") && !wantPlay) setPlaying(false) }
             "v:waiting" -> listener?.onBuffering(true)
             "v:ended" -> onEndedEvent()
             "v:time" -> obj(json)?.let { o ->
                 progress((o.optDouble("t") * 1000).toLong(), (o.optDouble("d") * 1000).toLong())
                 val p = o.optBoolean("p")
-                if (p != playing && !o.optBoolean("e")) setPlaying(p)
+                if (p && !playing && !o.optBoolean("e")) setPlaying(true)
             }
             "v:error" -> listener?.onError("This TikTok video failed to play.")
         }
@@ -227,8 +227,14 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
         listener?.onPlayingChanged(p)
     }
 
+    private var lastProgressAt = 0L
+
     private fun progress(pos: Long, dur: Long) {
         if (dur > 0) durationMs = dur
+        val now = android.os.SystemClock.uptimeMillis()
+        // The page can hold more than one <video>; time moving forward is the reliable sign of playback.
+        if (lastProgressAt > 0 && pos > lastPosMs + 150 && now - lastProgressAt < 3000 && !playing && wantPlay) setPlaying(true)
+        lastProgressAt = now
         lastPosMs = pos
         listener?.onProgress(pos, durationMs)
     }
@@ -257,6 +263,7 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
     override fun pause() {
         wantPlay = false
         js("window.__ft&&__ft.pause()")
+        if (playing) { playing = false; listener?.onPlayingChanged(false) }
     }
 
     override fun seekTo(ms: Long) {
@@ -356,7 +363,10 @@ class TikTokWebBackend(private val context: Context, private val embedMode: Int)
   function attach(v){vid=v;try{v.playbackRate=st.rate;v.loop=st.loop;v.muted=st.muted;}catch(e){}
     ['play','playing','pause','ended','waiting','loadedmetadata','error'].forEach(function(n){v.addEventListener(n,function(){send('v:'+n,info());});});
     send('v:attached',info());}
-  setInterval(function(){var v=document.querySelector('video');if(v&&v!==vid)attach(v);
+  function pick(){var vs=document.querySelectorAll('video'),best=null,area=-1;
+    for(var i=0;i<vs.length;i++){var v=vs[i];if(!v.paused&&!v.ended)return v;var r=v.getBoundingClientRect();var a=r.width*r.height;if(a>area){area=a;best=v;}}
+    return best;}
+  setInterval(function(){var v=pick();if(v&&v!==vid)attach(v);
     if(vid){try{if(vid.playbackRate!==st.rate)vid.playbackRate=st.rate;if(vid.loop!==st.loop)vid.loop=st.loop;}catch(e){}send('v:time',info());}},500);
   window.__ft={
     play:function(){if(vid){var p=vid.play();if(p&&p.catch)p.catch(function(){post('play');});}else post('play');},

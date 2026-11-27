@@ -181,6 +181,7 @@ class FloatingPlayerWindow(
     private var controlsVisible = true
     private var panelOpen = false
     private var animator: ValueAnimator? = null
+    private var tinyMode = false
     private var pageTouch = false
     private val pageTouchBar = Ui.text(ctx, "Touching the TikTok page  ·  Done", 12f, Color.BLACK, bold = true).apply {
         gravity = Gravity.CENTER
@@ -402,7 +403,10 @@ class FloatingPlayerWindow(
             val s = dp(playDp)
             if (it.width != s) { it.width = s; it.height = s; it.marginStart = dp(playDp * 0.18f); it.marginEnd = dp(playDp * 0.18f); btnPlay.layoutParams = it; val p = dp(playDp * 0.2f); btnPlay.setPadding(p, p, p, p) }
         }
-        topBar.visibility = if (hDp < 64) View.GONE else View.VISIBLE
+        // Thumbnail size: no buttons at all. Tap = play/pause, double-tap = maximize.
+        tinyMode = tiny
+        topBar.visibility = if (tiny || hDp < 64) View.GONE else View.VISIBLE
+        centerRow.visibility = if (tiny) View.GONE else View.VISIBLE
         btnPrev.visibility = if (tiny) View.GONE else View.VISIBLE
         btnNext.visibility = if (tiny) View.GONE else View.VISIBLE
         titleView.visibility = if (compact) View.GONE else View.VISIBLE
@@ -867,6 +871,7 @@ class FloatingPlayerWindow(
         when {
             panelOpen -> closePanel()
             audioOnly -> {}
+            tinyMode -> controller.togglePlay()
             controlsVisible -> hideControls()
             else -> showControls()
         }
