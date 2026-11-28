@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Chess Coach</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Chess Coach</h1>
+    <nav>
+      <button data-tab="play" class="on">Play</button>
+      <button data-tab="review">Review</button>
+      <button data-tab="profile">Profile</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-play" class="tab">
+      <div id="status"></div>
+      <div id="boardWrap">
+        <div id="board"></div>
+        <svg id="arrows" viewBox="0 0 8 8" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <marker id="ah-good" markerWidth="3" markerHeight="3" refX="2.2" refY="1.5" orient="auto">
+              <path d="M0,0 L3,1.5 L0,3 z" fill="#2ecc71"/>
+            </marker>
+            <marker id="ah-threat" markerWidth="3" markerHeight="3" refX="2.2" refY="1.5" orient="auto">
+              <path d="M0,0 L3,1.5 L0,3 z" fill="#e74c3c"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+
+      <div class="row">
+        <button id="newWhite">New game: White</button>
+        <button id="newBlack">New game: Black</button>
+      </div>
+      <div class="row">
+        <button id="hint" class="primary">Stuck? Hint</button>
+        <button id="undo">Undo</button>
+        <button id="flip">Flip board</button>
+        <button id="resign">Resign</button>
+      </div>
+
+      <div class="card" id="coach">
+        <h2 id="hintTitle">Coach</h2>
+        <div id="hintText" class="muted">Press <b>Stuck? Hint</b> and I will tell you what to do next and why.</div>
+        <ol id="steps"></ol>
+        <p id="live" class="live"></p>
+        <p id="focusTip" class="tip"></p>
+      </div>
+
+      <div class="card">
+        <h2>Moves</h2>
+        <div id="moveList" class="moves"></div>
+      </div>
+    </section>
+
+    <section id="tab-review" class="tab" hidden>
+      <div class="card">
+        <h2>Your game, annotated</h2>
+        <p class="muted">Every move you played, graded against the best move. The coach watches each move as you make it.</p>
+      </div>
+      <div id="reviewBody"></div>
+    </section>
+
+    <section id="tab-profile" class="tab" hidden>
+      <div class="card" id="profileBody"></div>
+      <div class="card">
+        <h2>How should I teach you?</h2>
+        <p class="muted">Choose the kind of help that works best for you.</p>
+        <label class="opt"><input type="radio" name="style" value="visual"> <b>Pictures</b>: arrows on the board show the idea.</label>
+        <label class="opt"><input type="radio" name="style" value="words"> <b>Words</b>: longer explanations and the principle behind each move.</label>
+        <label class="opt"><input type="radio" name="style" value="steps"> <b>Steps</b>: a checklist to run through every turn.</label>
+        <label class="opt"><input type="checkbox" id="liveToggle"> Live commentary on every move I play</label>
+      </div>
+    </section>
+  </main>
+
+  <div id="promo" hidden>
+    <div class="promo-box">
+      <p>Promote to:</p>
+      <div id="promoChoices"></div>
+      <button id="promoCancel">Cancel</button>
+    </div>
+  </div>
+
+  <script src="engine.js"></script>
+  <script src="coach.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
