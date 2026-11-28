@@ -7,4 +7,4 @@ Single-file web app (`index.html`) that shows which accounts you follow that don
 - Add usernames to the keep list; they're saved in your browser's localStorage and excluded from results.
 - Work through the list with "Open next profile", or export it as CSV/clipboard.
 
-Unfollowing is left to you on purpose: automating it requires your Instagram password and violates Instagram's terms, and is a common cause of action blocks and bans.
+Unfollowing is left to you on purpose: automating it requires your Instagram password and violates Instagram's terms, and is a common cause of action blocks and bans. "Paced mode" helps you go slowly instead: a daily cap (default 25) and a random 45-120s cooldown between profiles. This lowers risk but cannot guarantee it. The layout is mobile-friendly; on a phone, profile links open in the Instagram app.
