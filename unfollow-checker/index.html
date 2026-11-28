@@ -41,7 +41,8 @@
   .hidden { display:none; }
   .pace { text-align:center; }
   .pace .big { font-size:28px; font-weight:700; margin:6px 0; }
-  .pace button { width:100%; padding:14px; font-size:17px; }
+  .btn { display:block; background:var(--accent); color:#fff; border-radius:8px; padding:14px; font-size:17px; font-weight:600; text-decoration:none; }
+  .btn.off { opacity:.5; pointer-events:none; }
   .pace .opts { display:flex; gap:8px; margin:10px 0; }
   .pace .opts label { flex:1; font-size:13px; color:var(--mute); text-align:left; }
   .pace .opts input { width:100%; padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--txt); font:inherit; }
@@ -92,7 +93,6 @@
     <div class="row" style="margin-top:12px">
       <button id="keepSel" class="ghost">Add checked to keep list</button>
       <button id="copy" class="ghost">Copy list</button>
-      <button id="csv" class="ghost">Download CSV</button>
     </div>
     <div class="card pace" style="margin:16px 0 0">
       <h2>Paced mode</h2>
@@ -104,8 +104,9 @@
       </div>
       <div class="big" id="timer">Ready</div>
       <div class="hint" id="todayInfo"></div>
-      <button id="openNext">Open next profile</button>
+      <a id="openNext" class="btn" target="_blank" rel="noopener noreferrer" href="#">Open next profile</a>
     </div>
+    <textarea id="copybox" class="hidden" readonly></textarea>
     <input id="filter" type="text" placeholder="Filter usernames...">
     <ul id="list" class="list"></ul>
   </div>
@@ -113,14 +114,18 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
 const KEEP_KEY = 'fbc.keep';
 const DONE_KEY = 'fbc.done';
 
 let nonFollowers = [];
-let done = new Set(JSON.parse(localStorage.getItem(DONE_KEY) || '[]'));
+let done = new Set(JSON.parse(store.get(DONE_KEY) || '[]'));
 
-$('keep').value = localStorage.getItem(KEEP_KEY) || '';
-$('keep').addEventListener('input', () => { localStorage.setItem(KEEP_KEY, $('keep').value); recompute(); });
+$('keep').value = store.get(KEEP_KEY) || '';
+$('keep').addEventListener('input', () => { store.set(KEEP_KEY, $('keep').value); recompute(); });
 
 const norm = s => String(s).trim().replace(/^@/, '').toLowerCase();
 const keepSet = () => new Set($('keep').value.split(/[\s,]+/).map(norm).filter(Boolean));
@@ -169,6 +174,7 @@ function recompute() {
 }
 
 function render() {
+  if (typeof syncNext === 'function') syncNext();
   const q = norm($('filter').value);
   const ul = $('list');
   ul.innerHTML = '';
@@ -179,14 +185,14 @@ function render() {
       '<a class="open" target="_blank" rel="noopener noreferrer">Open</a>';
     li.querySelector('.name').textContent = u;
     li.querySelector('a').href = 'https://www.instagram.com/' + encodeURIComponent(u) + '/';
-    li.querySelector('a').addEventListener('click', () => { const t = today(); t.n++; localStorage.setItem(TODAY_KEY, JSON.stringify(t)); markDone(u); updateInfo(); });
+    li.querySelector('a').addEventListener('click', () => { const t = today(); t.n++; store.set(TODAY_KEY, JSON.stringify(t)); markDone(u); updateInfo(); });
     ul.appendChild(li);
   }
 }
 
 function markDone(u) {
   done.add(u);
-  localStorage.setItem(DONE_KEY, JSON.stringify([...done]));
+  store.set(DONE_KEY, JSON.stringify([...done]));
   render();
 }
 
@@ -195,37 +201,42 @@ $('filter').addEventListener('input', render);
 const TODAY_KEY = 'fbc.today';
 function today() {
   const d = new Date().toDateString();
-  let t = JSON.parse(localStorage.getItem(TODAY_KEY) || '{}');
+  let t = JSON.parse(store.get(TODAY_KEY) || '{}');
   if (t.d !== d) t = { d, n: 0 };
   return t;
 }
 function updateInfo() {
+  syncNext();
   $('todayInfo').textContent = 'Opened today: ' + today().n + ' / ' + $('cap').value;
 }
 let cooling = false;
 function cooldown() {
   const lo = Math.max(10, +$('minW').value || 45), hi = Math.max(lo, +$('maxW').value || 120);
   let left = Math.round(lo + Math.random() * (hi - lo));
-  cooling = true; $('openNext').disabled = true;
+  cooling = true; syncNext();
   const iv = setInterval(() => {
     if (--left > 0) { $('timer').textContent = 'Next in ' + left + 's'; return; }
-    clearInterval(iv); cooling = false; $('openNext').disabled = false; $('timer').textContent = 'Ready';
+    clearInterval(iv); cooling = false; syncNext();
   }, 1000);
   $('timer').textContent = 'Next in ' + left + 's';
 }
 $('cap').addEventListener('input', updateInfo);
 updateInfo();
 
+function nextUser() { return nonFollowers.find(u => !done.has(u)); }
+function syncNext() {
+  const a = $('openNext'), u = nextUser();
+  const capHit = today().n >= (+$('cap').value || 25);
+  a.href = u ? 'https://www.instagram.com/' + encodeURIComponent(u) + '/' : '#';
+  a.classList.toggle('off', cooling || capHit || !u);
+  if (!cooling) $('timer').textContent = capHit ? 'Daily cap reached' : (u ? 'Ready' : (nonFollowers.length ? 'All done!' : 'Ready'));
+}
 $('openNext').addEventListener('click', () => {
-  if (cooling) return;
-  const t = today();
-  if (t.n >= (+$('cap').value || 25)) { $('timer').textContent = 'Daily cap reached'; return; }
-  const next = nonFollowers.find(u => !done.has(u));
-  if (!next) { $('timer').textContent = 'All done!'; return; }
-  // The Open click is a user gesture, so mobile browsers allow the new tab / app handoff.
-  window.open('https://www.instagram.com/' + encodeURIComponent(next) + '/', '_blank', 'noopener');
-  t.n++; localStorage.setItem(TODAY_KEY, JSON.stringify(t));
-  markDone(next); updateInfo(); cooldown();
+  const u = nextUser(), t = today();
+  if (cooling || !u || t.n >= (+$('cap').value || 25)) return;
+  t.n++; store.set(TODAY_KEY, JSON.stringify(t));
+  done.add(u); store.set(DONE_KEY, JSON.stringify([...done]));
+  setTimeout(() => { render(); updateInfo(); cooldown(); }, 0);
 });
 
 $('keepSel').addEventListener('click', () => {
@@ -233,21 +244,17 @@ $('keepSel').addEventListener('click', () => {
   if (!picked.length) return;
   const cur = $('keep').value.trim();
   $('keep').value = (cur ? cur + '\n' : '') + picked.join('\n');
-  localStorage.setItem(KEEP_KEY, $('keep').value);
+  store.set(KEEP_KEY, $('keep').value);
   recompute();
 });
 
 $('copy').addEventListener('click', () => {
-  navigator.clipboard.writeText(nonFollowers.join('\n')).then(() => alert('Copied ' + nonFollowers.length + ' usernames.'));
+  const text = nonFollowers.join('\n');
+  const box = $('copybox');
+  box.value = text; box.classList.remove('hidden'); box.select();
+  try { navigator.clipboard.writeText(text).catch(() => {}); } catch (e) {}
 });
 
-$('csv').addEventListener('click', () => {
-  const csv = 'username,profile\n' + nonFollowers.map(u => u + ',https://www.instagram.com/' + u + '/').join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'non-followers.csv';
-  a.click();
-});
 </script>
 </body>
 </html>
